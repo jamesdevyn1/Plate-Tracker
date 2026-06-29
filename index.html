@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Plate</title>
+<meta name="theme-color" content="#ECEFE9">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Plate">
+<style>html,body{margin:0;padding:0;background:#ECEFE9;}</style>
+<script>
+(function(){
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+  function show(html){
+    var r=document.getElementById("root");
+    if(r){ r.innerHTML='<div style="font-family:-apple-system,system-ui,sans-serif;padding:26px;color:#1B231D;font-size:15px;line-height:1.55;max-width:560px;margin:0 auto">'+html+'</div>'; }
+  }
+  window.__mounted=false; window.__err=false;
+  window.addEventListener("error", function(e){
+    if(e && e.target && (e.target.tagName==="SCRIPT"||e.target.tagName==="LINK")){
+      window.__err=true;
+      show("<b>Could not load a required file:</b><br><span style=\"word-break:break-all;color:#6B756C\">"+esc(e.target.src||e.target.href)+"</span><br><br>Usually a connection problem or a content/ad blocker. Reconnect (or allow this site) and reopen.");
+      return;
+    }
+    window.__err=true;
+    show("<b>Error:</b> "+esc(e&&e.message?e.message:"script error")+"<br><br>Copy this line and tell Claude.");
+  }, true);
+  window.addEventListener("unhandledrejection", function(e){
+    window.__err=true;
+    show("<b>Error:</b> "+esc(e&&e.reason?(e.reason.message||e.reason):"promise rejection")+"<br><br>Copy this line and tell Claude.");
+  });
+  try{ if("serviceWorker" in navigator){ navigator.serviceWorker.getRegistrations().then(function(rs){ rs.forEach(function(r){ r.unregister(); }); }); } }catch(_){}
+  try{ if(window.caches){ caches.keys().then(function(ks){ ks.forEach(function(k){ caches.delete(k); }); }); } }catch(_){}
+  window.addEventListener("load", function(){
+    setTimeout(function(){
+      if(!window.__mounted && !window.__err){
+        show("Still loading after several seconds. React most likely could not download. Check your internet or any content blocker, then reopen.");
+      }
+    }, 8000);
+  });
+})();
+</script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"><div style="font-family:-apple-system,system-ui,sans-serif;padding:26px;color:#6B756C;font-size:15px">Loading Plate…</div></div>
+<script id="appsrc" type="text/plain">
+const { useState, useEffect } = React;
+window.storage = {
+  async get(key){ try { const v = localStorage.getItem('plate::'+key); return v===null?null:{key,value:v,shared:false}; } catch(e){ return null; } },
+  async set(key,value){ localStorage.setItem('plate::'+key, String(value)); return {key,value,shared:false}; },
+  async delete(key){ localStorage.removeItem('plate::'+key); return {key,deleted:true}; },
+  async list(prefix){ const keys=[]; for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k && k.indexOf('plate::')===0){ const bare=k.slice(7); if(!prefix || bare.indexOf(prefix)===0) keys.push(bare);} } return {keys}; }
+};
+
+// ---- helpers ------------------------------------------------------
+function localDateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function prettyDate(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+}
+function shortDate(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+const STORE_KEY = "plate-data-v1";
+const round = (x) => Math.max(0, Math.round(Number(x) || 0));
+const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const trimNum = (x) => (Number.isInteger(x) ? String(x) : String(Math.round(x * 100) / 100));
+
+function sumEntries(entries = []) {
+  return entries.reduce(
+    (a, e) => ({
+      calories: a.calories + round(e.calories),
+      protein: a.protein + round(e.protein),
+      carbs: a.carbs + round(e.carbs),
+      fat: a.fat + round(e.fat),
+    }),
+    { calories: 0, protein: 0, carbs: 0, fat: 0 }
+  );
+}
+
+const f = (id, name, unit, cal, p, c, fat) => ({
+  id,
+  name,
+  unit,
+  per: { calories: cal, protein: p, carbs: c, fat: fat },
+});
+
+// per-unit values; the branded ones come from their published labels, the rest are typical values
+const SEED_FOODS = [
+  f("gv-white-bread", "Great Value white bread", "slice", 70, 3, 13, 1),
+  f("black-forest-ham", "Black Forest ham, deli", "slice", 20, 3, 1, 1),
+  f("gv-pepperjack", "Great Value pepper jack", "slice", 70, 4, 0, 5),
+  f("cheddar-slice", "Cheddar cheese", "slice", 110, 7, 0, 9),
+  f("large-egg", "Large egg", "egg", 70, 6, 0, 5),
+  f("banana", "Banana", "medium", 105, 1, 27, 0),
+  f("apple", "Apple", "medium", 95, 0, 25, 0),
+  f("chicken-breast", "Chicken breast, cooked", "100 g", 165, 31, 0, 4),
+  f("white-rice", "White rice, cooked", "cup", 205, 4, 45, 0),
+  f("whole-milk", "Whole milk", "cup", 150, 8, 12, 8),
+  f("peanut-butter", "Peanut butter", "tbsp", 95, 4, 3, 8),
+  f("oatmeal", "Oatmeal, cooked", "cup", 150, 5, 27, 3),
+  f("greek-yogurt", "Greek yogurt, plain nonfat", "170 g cup", 100, 18, 6, 0),
+  f("almonds", "Almonds", "oz", 165, 6, 6, 14),
+  f("ground-beef-8020", "Ground beef, 80/20, raw", "oz", 71, 5, 0, 6),
+  f("potato-raw", "Potato, raw", "oz", 22, 1, 5, 0),
+];
+
+function mealTotals(meal, foods) {
+  const map = Object.fromEntries(foods.map((x) => [x.id, x]));
+  return (meal.items || []).reduce(
+    (a, it) => {
+      const food = map[it.foodId];
+      if (!food) return a;
+      const q = Number(it.qty) || 0;
+      return {
+        calories: a.calories + food.per.calories * q,
+        protein: a.protein + food.per.protein * q,
+        carbs: a.carbs + food.per.carbs * q,
+        fat: a.fat + food.per.fat * q,
+      };
+    },
+    { calories: 0, protein: 0, carbs: 0, fat: 0 }
+  );
+}
+
+function macroLine(m) {
+  return `${round(m.calories)} cal  ·  P${round(m.protein)} C${round(m.carbs)} F${round(m.fat)}`;
+}
+
+// ---- component ----------------------------------------------------
+function App() {
+  const [data, setData] = useState(null); // { targets, days, foods, meals }
+  const [loaded, setLoaded] = useState(false);
+  const [today, setToday] = useState(localDateKey());
+  const [tab, setTab] = useState("log"); // log | meal | new
+  const [search, setSearch] = useState("");
+  const [qtys, setQtys] = useState({}); // rowKey -> qty
+  const [saveMsg, setSaveMsg] = useState("");
+
+  // new-food form
+  const [nf, setNf] = useState({ name: "", unit: "serving", calories: "", protein: "", carbs: "", fat: "" });
+
+  // meal builder
+  const [mealName, setMealName] = useState("");
+  const [mealServings, setMealServings] = useState(1);
+  const [basket, setBasket] = useState([]); // [{foodId, qty}]
+  const [mealSearch, setMealSearch] = useState("");
+
+  // goals + history
+  const [targetsOpen, setTargetsOpen] = useState(false);
+  const [tDraft, setTDraft] = useState({ calories: "", protein: "", carbs: "", fat: "" });
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      let next = { targets: null, days: {}, foods: SEED_FOODS, meals: [] };
+      try {
+        const res = await window.storage.get(STORE_KEY, false);
+        if (res && res.value) {
+          const p = JSON.parse(res.value);
+          next = {
+            targets: p.targets ?? null,
+            days: p.days ?? {},
+            foods: Array.isArray(p.foods) && p.foods.length ? p.foods : SEED_FOODS,
+            meals: Array.isArray(p.meals) ? p.meals : [],
+          };
+        }
+      } catch (e) {}
+      // Bring in any newly added built-in foods without disturbing saved/custom ones.
+      const haveIds = new Set(next.foods.map((x) => x.id));
+      const missing = SEED_FOODS.filter((s) => !haveIds.has(s.id));
+      if (missing.length) {
+        next = { ...next, foods: [...next.foods, ...missing] };
+        try {
+          await window.storage.set(STORE_KEY, JSON.stringify(next), false);
+        } catch (e) {}
+      }
+      setData(next);
+      if (next.targets) setTDraft({ ...next.targets });
+      setLoaded(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const k = localDateKey();
+      setToday((cur) => (cur === k ? cur : k));
+    }, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function persist(next) {
+    setData(next);
+    try {
+      await window.storage.set(STORE_KEY, JSON.stringify(next), false);
+    } catch (e) {
+      flash("Couldn't save that — your last change may not stick.");
+    }
+  }
+  function flash(msg) {
+    setSaveMsg(msg);
+    setTimeout(() => setSaveMsg(""), 1800);
+  }
+
+  const entries = data?.days?.[today] ?? [];
+  const totals = sumEntries(entries);
+  const targets = data?.targets ?? null;
+  const foods = data?.foods ?? [];
+  const meals = data?.meals ?? [];
+
+  function addEntry(name, m) {
+    const entry = {
+      id: uid(),
+      name: String(name).slice(0, 80),
+      calories: round(m.calories),
+      protein: round(m.protein),
+      carbs: round(m.carbs),
+      fat: round(m.fat),
+    };
+    const days = { ...(data.days || {}) };
+    days[today] = [...(days[today] || []), entry];
+    persist({ ...data, days });
+  }
+  function removeEntry(id) {
+    const days = { ...(data.days || {}) };
+    days[today] = (days[today] || []).filter((e) => e.id !== id);
+    if (days[today].length === 0) delete days[today];
+    persist({ ...data, days });
+  }
+  function clearToday() {
+    const days = { ...(data.days || {}) };
+    delete days[today];
+    persist({ ...data, days });
+  }
+
+  const getQty = (k) => {
+    const v = qtys[k];
+    return v === undefined || v === "" ? 1 : Number(v);
+  };
+  const setQty = (k, v) => setQtys((q) => ({ ...q, [k]: v }));
+
+  function logFood(food, qty) {
+    const q = Number(qty) || 1;
+    const m = {
+      calories: food.per.calories * q,
+      protein: food.per.protein * q,
+      carbs: food.per.carbs * q,
+      fat: food.per.fat * q,
+    };
+    addEntry(q === 1 ? food.name : `${food.name} ×${trimNum(q)}`, m);
+    flash(`Added ${food.name}`);
+  }
+
+  function logMeal(meal, servings) {
+    const s = Number(servings) || 1;
+    const base = mealTotals(meal, foods);
+    const m = { calories: base.calories * s, protein: base.protein * s, carbs: base.carbs * s, fat: base.fat * s };
+    addEntry(s === 1 ? meal.name : `${meal.name} ×${trimNum(s)}`, m);
+    flash(`Added ${meal.name}`);
+  }
+
+  function saveNewFood(alsoLog) {
+    if (!nf.name.trim()) return;
+    const food = {
+      id: `c-${uid()}`,
+      name: nf.name.trim(),
+      unit: nf.unit.trim() || "serving",
+      per: {
+        calories: round(nf.calories),
+        protein: round(nf.protein),
+        carbs: round(nf.carbs),
+        fat: round(nf.fat),
+      },
+      custom: true,
+    };
+    persist({ ...data, foods: [food, ...foods] });
+    if (alsoLog) logFood(food, 1);
+    else flash(`Saved ${food.name} to your foods`);
+    setNf({ name: "", unit: "serving", calories: "", protein: "", carbs: "", fat: "" });
+  }
+
+  function deleteFood(id) {
+    persist({ ...data, foods: foods.filter((x) => x.id !== id) });
+  }
+
+  // meal builder ops
+  function addToBasket(food) {
+    setBasket((b) => {
+      const i = b.findIndex((x) => x.foodId === food.id);
+      if (i >= 0) {
+        const copy = [...b];
+        copy[i] = { ...copy[i], qty: Number(copy[i].qty) + 1 };
+        return copy;
+      }
+      return [...b, { foodId: food.id, qty: 1 }];
+    });
+    setMealSearch("");
+  }
+  function setBasketQty(foodId, qty) {
+    setBasket((b) => b.map((x) => (x.foodId === foodId ? { ...x, qty } : x)));
+  }
+  function removeFromBasket(foodId) {
+    setBasket((b) => b.filter((x) => x.foodId !== foodId));
+  }
+  const draftMeal = { name: mealName || "Meal", items: basket.map((x) => ({ foodId: x.foodId, qty: Number(x.qty) || 0 })) };
+  const draftTotals = mealTotals(draftMeal, foods);
+
+  function saveMeal() {
+    if (!basket.length) return;
+    const meal = { id: `m-${uid()}`, name: mealName.trim() || "Meal", items: draftMeal.items };
+    persist({ ...data, meals: [meal, ...meals] });
+    flash(`Saved ${meal.name} to meals`);
+  }
+  function logDraftMeal() {
+    if (!basket.length) return;
+    logMeal(draftMeal, mealServings);
+    setBasket([]);
+    setMealName("");
+    setMealServings(1);
+    setTab("log");
+  }
+  function deleteMeal(id) {
+    persist({ ...data, meals: meals.filter((m) => m.id !== id) });
+  }
+
+  function saveTargets() {
+    const t = { calories: round(tDraft.calories), protein: round(tDraft.protein), carbs: round(tDraft.carbs), fat: round(tDraft.fat) };
+    const any = t.calories || t.protein || t.carbs || t.fat;
+    persist({ ...data, targets: any ? t : null });
+    setTargetsOpen(false);
+  }
+  function clearTargets() {
+    persist({ ...data, targets: null });
+    setTDraft({ calories: "", protein: "", carbs: "", fat: "" });
+    setTargetsOpen(false);
+  }
+
+  // plate bar
+  const pCal = totals.protein * 4, cCal = totals.carbs * 4, fCal = totals.fat * 9;
+  const macroCal = pCal + cCal + fCal || 1;
+  const seg = { protein: (pCal / macroCal) * 100, carbs: (cCal / macroCal) * 100, fat: (fCal / macroCal) * 100 };
+  const hasEntries = entries.length > 0;
+  const pastDays = data ? Object.keys(data.days || {}).filter((k) => k !== today).sort().reverse() : [];
+
+  const MACROS = [
+    { key: "protein", label: "Protein", color: "var(--protein)" },
+    { key: "carbs", label: "Carbs", color: "var(--carbs)" },
+    { key: "fat", label: "Fat", color: "var(--fat)" },
+  ];
+
+  const q = search.trim().toLowerCase();
+  const mealMatches = meals.filter((m) => m.name.toLowerCase().includes(q));
+  const foodMatches = foods.filter((x) => x.name.toLowerCase().includes(q));
+  const mq = mealSearch.trim().toLowerCase();
+  const mealBuilderMatches = mq ? foods.filter((x) => x.name.toLowerCase().includes(mq)) : [];
+
+  function Stepper({ value, onChange, step = 1, min = 0 }) {
+    const num = Number(value);
+    return (
+      <div className="stepper">
+        <button className="step" onClick={() => onChange(Math.max(min, Math.round((num - step) * 100) / 100))} aria-label="decrease">−</button>
+        <input
+          className="qty"
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <button className="step" onClick={() => onChange(Math.round((num + step) * 100) / 100)} aria-label="increase">+</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="plate-root">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap');
+        .plate-root {
+          --bg:#ECEFE9; --surface:#FFFFFF; --ink:#1B231D; --muted:#6B756C;
+          --line:#DCE2D7; --soft:#F5F8F2; --protein:#E8624A; --carbs:#EBA23A; --fat:#3E8E7E;
+          --display:'Bricolage Grotesque', system-ui, sans-serif;
+          --body:'Inter', system-ui, sans-serif; --mono:'Space Mono', ui-monospace, monospace;
+          background:var(--bg); color:var(--ink); font-family:var(--body);
+          min-height:100vh; width:100%; padding:22px 16px 64px; line-height:1.45; -webkit-font-smoothing:antialiased;
+        }
+        .plate-root *, .plate-root *::before, .plate-root *::after { box-sizing:border-box; }
+        .wrap { max-width:560px; margin:0 auto; }
+        .topbar { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+        .brand { font-family:var(--display); font-weight:800; font-size:24px; letter-spacing:-0.02em; }
+        .brand .dot { color:var(--fat); }
+        .date { font-size:13px; color:var(--muted); font-weight:500; }
+        .card { background:var(--surface); border:1px solid var(--line); border-radius:20px; }
+
+        .hero { padding:22px 22px 20px; margin-top:14px; }
+        .kcal-row { display:flex; align-items:flex-end; justify-content:space-between; gap:14px; }
+        .kcal-num { font-family:var(--mono); font-weight:700; font-size:54px; line-height:.92; letter-spacing:-0.03em; }
+        .kcal-label { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.12em; margin-top:6px; }
+        .kcal-target { font-family:var(--mono); font-size:13px; color:var(--muted); text-align:right; }
+        .kcal-target b { color:var(--ink); font-weight:700; }
+        .plate-bar { height:16px; border-radius:99px; background:#EEF1EC; overflow:hidden; display:flex; margin:18px 0 4px; box-shadow:inset 0 0 0 1px var(--line); }
+        .plate-seg { height:100%; transition:width .55s cubic-bezier(.2,.8,.2,1); }
+        .plate-empty { font-size:13px; color:var(--muted); margin:16px 0 2px; }
+        .macros { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:18px; }
+        .macro { background:var(--soft); border-radius:14px; padding:12px; }
+        .macro-head { display:flex; align-items:center; gap:7px; }
+        .swatch { width:9px; height:9px; border-radius:3px; flex:none; }
+        .macro-name { font-size:12px; color:var(--muted); font-weight:600; }
+        .macro-val { font-family:var(--mono); font-weight:700; font-size:21px; margin-top:6px; letter-spacing:-0.02em; }
+        .macro-val span { font-size:12px; color:var(--muted); font-weight:400; }
+        .mini-track { height:4px; border-radius:99px; background:#E4E9E0; margin-top:9px; overflow:hidden; }
+        .mini-fill { height:100%; border-radius:99px; transition:width .5s ease; }
+        .macro-left { font-size:11px; color:var(--muted); margin-top:6px; font-family:var(--mono); }
+
+        .addbox { margin-top:14px; padding:16px; }
+        .tabs { display:flex; gap:6px; background:var(--soft); padding:4px; border-radius:13px; margin-bottom:14px; }
+        .tab { flex:1; border:none; background:none; font-family:var(--body); font-weight:600; font-size:13.5px; color:var(--muted); padding:9px 6px; border-radius:10px; cursor:pointer; }
+        .tab.active { background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.06); }
+
+        .input { width:100%; font-family:var(--body); font-size:15px; color:var(--ink); background:var(--soft); border:1px solid var(--line); border-radius:12px; padding:13px 14px; outline:none; transition:border-color .15s, box-shadow .15s; }
+        .input::placeholder { color:#9AA39A; }
+        .input:focus { border-color:var(--fat); box-shadow:0 0 0 3px rgba(62,142,126,.15); }
+        .num { font-family:var(--mono); }
+
+        .list-scroll { margin-top:12px; max-height:330px; overflow-y:auto; border:1px solid var(--line); border-radius:14px; }
+        .row { display:flex; align-items:center; gap:10px; padding:11px 13px; border-bottom:1px solid var(--line); }
+        .row:last-child { border-bottom:none; }
+        .row-main { flex:1; min-width:0; }
+        .row-name { font-weight:500; font-size:14.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .row-meta { font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:2px; }
+        .tag { font-family:var(--body); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--fat); background:rgba(62,142,126,.12); padding:1px 6px; border-radius:6px; margin-left:6px; vertical-align:middle; }
+
+        .stepper { display:flex; align-items:center; gap:4px; flex:none; }
+        .step { width:28px; height:30px; border:1px solid var(--line); background:var(--surface); border-radius:8px; font-size:17px; line-height:1; color:var(--ink); cursor:pointer; }
+        .step:active { background:var(--soft); }
+        .qty { width:40px; height:30px; text-align:center; border:1px solid var(--line); border-radius:8px; font-family:var(--mono); font-size:13px; background:var(--surface); outline:none; }
+        .qty:focus { border-color:var(--fat); }
+        .add-mini { border:none; background:var(--ink); color:#fff; font-family:var(--body); font-weight:600; font-size:13px; border-radius:9px; padding:0 13px; height:30px; cursor:pointer; flex:none; }
+        .add-mini:active { transform:translateY(1px); }
+        .del { border:none; background:none; color:#B7BEB3; font-size:17px; cursor:pointer; padding:2px 4px; flex:none; }
+        .del:hover { color:var(--protein); }
+
+        .btn { font-family:var(--body); font-weight:600; font-size:15px; color:#fff; background:var(--ink); border:none; border-radius:12px; padding:12px 18px; cursor:pointer; }
+        .btn:hover { opacity:.92; } .btn:active { transform:translateY(1px); } .btn:disabled { opacity:.4; cursor:default; }
+        .btn-soft { background:var(--soft); color:var(--ink); border:1px solid var(--line); }
+        .btn-ghost { background:none; color:var(--muted); border:none; font-family:var(--body); font-size:13px; cursor:pointer; padding:6px 2px; font-weight:500; }
+        .btn-ghost:hover { color:var(--ink); }
+        .btn-row { display:flex; gap:8px; margin-top:12px; }
+        .btn-row .btn { flex:1; }
+
+        .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px; }
+        .form-grid .span2 { grid-column:1 / -1; }
+        .hint { color:var(--muted); font-size:12.5px; margin-top:10px; }
+        .empty-mini { padding:18px 14px; color:var(--muted); font-size:13.5px; text-align:center; }
+
+        .total-line { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:12px 14px; background:var(--soft); border-radius:12px; }
+        .total-line .lbl { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.1em; }
+        .total-line .val { font-family:var(--mono); font-weight:700; font-size:14px; }
+        .serv-row { display:flex; align-items:center; justify-content:space-between; margin-top:12px; }
+        .serv-row .lbl { font-size:14px; font-weight:500; }
+
+        .section-h { display:flex; justify-content:space-between; align-items:center; margin:24px 4px 8px; }
+        .section-h h3 { font-family:var(--display); font-weight:700; font-size:15px; margin:0; letter-spacing:-0.01em; }
+        .entry { display:flex; align-items:center; gap:12px; padding:13px 16px; border-bottom:1px solid var(--line); }
+        .entry:last-child { border-bottom:none; }
+        .entry-left { min-width:0; flex:1; }
+        .entry-name { font-weight:500; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .entry-macros { font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:3px; }
+        .entry-cal { font-family:var(--mono); font-weight:700; font-size:15px; }
+        .x { border:none; background:none; color:#B7BEB3; font-size:20px; line-height:1; cursor:pointer; padding:4px 2px; flex:none; }
+        .x:hover { color:var(--protein); }
+        .empty { text-align:center; padding:30px 18px; color:var(--muted); font-size:14px; }
+
+        .hist-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); }
+        .hist-row:last-child { border-bottom:none; }
+        .hist-day { font-size:14px; font-weight:500; }
+        .hist-nums { font-family:var(--mono); font-size:12px; color:var(--muted); }
+        .hist-kcal { color:var(--ink); font-weight:700; }
+        .footnote { text-align:center; color:var(--muted); font-size:11.5px; margin-top:28px; line-height:1.5; }
+        .toast { position:sticky; bottom:10px; margin:14px auto 0; width:fit-content; background:var(--ink); color:#fff; font-size:13px; padding:9px 16px; border-radius:99px; }
+
+        @media (max-width:380px){ .kcal-num{font-size:46px;} .macros{gap:8px;} .macro{padding:10px;} }
+        @media (prefers-reduced-motion: reduce){ .plate-seg,.mini-fill{transition:none;} }
+      `}</style>
+
+      <div className="wrap">
+        <div className="topbar">
+          <div className="brand">Plate<span className="dot">.</span></div>
+          <div className="date">{prettyDate(today)}</div>
+        </div>
+
+        {!loaded ? (
+          <div className="card hero"><div className="kcal-label">Loading your day…</div></div>
+        ) : (
+          <>
+            {/* HERO */}
+            <div className="card hero">
+              <div className="kcal-row">
+                <div>
+                  <div className="kcal-num">{totals.calories}</div>
+                  <div className="kcal-label">calories today</div>
+                </div>
+                {targets?.calories ? (
+                  <div className="kcal-target"><b>{Math.max(0, targets.calories - totals.calories)}</b> left<br />of {targets.calories}</div>
+                ) : null}
+              </div>
+
+              {hasEntries ? (
+                <div className="plate-bar" role="img" aria-label="Macro composition today">
+                  <div className="plate-seg" style={{ width: `${seg.protein}%`, background: "var(--protein)" }} />
+                  <div className="plate-seg" style={{ width: `${seg.carbs}%`, background: "var(--carbs)" }} />
+                  <div className="plate-seg" style={{ width: `${seg.fat}%`, background: "var(--fat)" }} />
+                </div>
+              ) : (
+                <div className="plate-empty">Your plate fills in as you log.</div>
+              )}
+
+              <div className="macros">
+                {MACROS.map((m) => {
+                  const val = totals[m.key];
+                  const tgt = targets?.[m.key] || 0;
+                  const pct = tgt ? Math.min(100, (val / tgt) * 100) : 0;
+                  return (
+                    <div className="macro" key={m.key}>
+                      <div className="macro-head"><span className="swatch" style={{ background: m.color }} /><span className="macro-name">{m.label}</span></div>
+                      <div className="macro-val">{val}<span>g</span></div>
+                      {tgt ? (<><div className="mini-track"><div className="mini-fill" style={{ width: `${pct}%`, background: m.color }} /></div><div className="macro-left">{val} / {tgt}g</div></>) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ADD */}
+            <div className="card addbox">
+              <div className="tabs">
+                <button className={`tab ${tab === "log" ? "active" : ""}`} onClick={() => setTab("log")}>Log food</button>
+                <button className={`tab ${tab === "meal" ? "active" : ""}`} onClick={() => setTab("meal")}>Build meal</button>
+                <button className={`tab ${tab === "new" ? "active" : ""}`} onClick={() => setTab("new")}>New food</button>
+              </div>
+
+              {tab === "log" && (
+                <>
+                  <input className="input" placeholder="Search foods and meals…" value={search} onChange={(e) => setSearch(e.target.value)} />
+                  <div className="list-scroll">
+                    {mealMatches.length === 0 && foodMatches.length === 0 ? (
+                      <div className="empty-mini">No match. Add it under “New food.”</div>
+                    ) : (
+                      <>
+                        {mealMatches.map((m) => {
+                          const key = `meal:${m.id}`;
+                          return (
+                            <div className="row" key={key}>
+                              <div className="row-main">
+                                <div className="row-name">{m.name}<span className="tag">meal</span></div>
+                                <div className="row-meta">{macroLine(mealTotals(m, foods))} · per serving</div>
+                              </div>
+                              <Stepper value={qtys[key] ?? 1} onChange={(v) => setQty(key, v)} />
+                              <button className="add-mini" onClick={() => { logMeal(m, getQty(key)); setQty(key, 1); }}>Add</button>
+                              <button className="del" aria-label="Delete meal" onClick={() => deleteMeal(m.id)}>×</button>
+                            </div>
+                          );
+                        })}
+                        {foodMatches.map((food) => {
+                          const key = `food:${food.id}`;
+                          return (
+                            <div className="row" key={key}>
+                              <div className="row-main">
+                                <div className="row-name">{food.name}</div>
+                                <div className="row-meta">{macroLine(food.per)} · per {food.unit}</div>
+                              </div>
+                              <Stepper value={qtys[key] ?? 1} onChange={(v) => setQty(key, v)} />
+                              <button className="add-mini" onClick={() => { logFood(food, getQty(key)); setQty(key, 1); }}>Add</button>
+                              {food.custom ? <button className="del" aria-label="Delete food" onClick={() => deleteFood(food.id)}>×</button> : null}
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </div>
+                  <div className="hint">Tap the steppers to set how many, then Add. e.g. ham → 8, bread → 4, pepper jack → 2.</div>
+                </>
+              )}
+
+              {tab === "meal" && (
+                <>
+                  <input className="input" placeholder="Meal name (e.g. Ham & pepper jack sandwich)" value={mealName} onChange={(e) => setMealName(e.target.value)} />
+                  <div style={{ height: 8 }} />
+                  <input className="input" placeholder="Add an ingredient…" value={mealSearch} onChange={(e) => setMealSearch(e.target.value)} />
+                  {mealBuilderMatches.length > 0 && (
+                    <div className="list-scroll">
+                      {mealBuilderMatches.slice(0, 8).map((food) => (
+                        <div className="row" key={food.id}>
+                          <div className="row-main"><div className="row-name">{food.name}</div><div className="row-meta">{macroLine(food.per)} · per {food.unit}</div></div>
+                          <button className="add-mini" onClick={() => addToBasket(food)}>+ Add</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {basket.length > 0 ? (
+                    <>
+                      <div className="list-scroll" style={{ marginTop: 12 }}>
+                        {basket.map((b) => {
+                          const food = foods.find((x) => x.id === b.foodId);
+                          if (!food) return null;
+                          return (
+                            <div className="row" key={b.foodId}>
+                              <div className="row-main"><div className="row-name">{food.name}</div><div className="row-meta">per {food.unit}</div></div>
+                              <Stepper value={b.qty} onChange={(v) => setBasketQty(b.foodId, v)} />
+                              <button className="del" aria-label="Remove" onClick={() => removeFromBasket(b.foodId)}>×</button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="serv-row">
+                        <span className="lbl">Servings to log now</span>
+                        <Stepper value={mealServings} onChange={setMealServings} min={1} />
+                      </div>
+                      <div className="total-line">
+                        <span className="lbl">This meal ×{trimNum(Number(mealServings) || 1)}</span>
+                        <span className="val">{macroLine({
+                          calories: draftTotals.calories * (Number(mealServings) || 1),
+                          protein: draftTotals.protein * (Number(mealServings) || 1),
+                          carbs: draftTotals.carbs * (Number(mealServings) || 1),
+                          fat: draftTotals.fat * (Number(mealServings) || 1),
+                        })}</span>
+                      </div>
+                      <div className="btn-row">
+                        <button className="btn" onClick={logDraftMeal}>Log now</button>
+                        <button className="btn btn-soft" onClick={saveMeal}>Save meal</button>
+                      </div>
+                      <div className="hint">Save the meal to reuse it later from the Log tab with one tap.</div>
+                    </>
+                  ) : (
+                    <div className="hint">Search ingredients above to build a meal, set its servings, then log or save it.</div>
+                  )}
+                </>
+              )}
+
+              {tab === "new" && (
+                <>
+                  <div className="form-grid">
+                    <input className="input span2" placeholder="Food name" value={nf.name} onChange={(e) => setNf({ ...nf, name: e.target.value })} />
+                    <input className="input span2" placeholder="Unit (slice, cup, serving…)" value={nf.unit} onChange={(e) => setNf({ ...nf, unit: e.target.value })} />
+                    <input className="input num" inputMode="numeric" placeholder="Calories" value={nf.calories} onChange={(e) => setNf({ ...nf, calories: e.target.value })} />
+                    <input className="input num" inputMode="numeric" placeholder="Protein (g)" value={nf.protein} onChange={(e) => setNf({ ...nf, protein: e.target.value })} />
+                    <input className="input num" inputMode="numeric" placeholder="Carbs (g)" value={nf.carbs} onChange={(e) => setNf({ ...nf, carbs: e.target.value })} />
+                    <input className="input num" inputMode="numeric" placeholder="Fat (g)" value={nf.fat} onChange={(e) => setNf({ ...nf, fat: e.target.value })} />
+                  </div>
+                  <div className="btn-row">
+                    <button className="btn" onClick={() => saveNewFood(true)} disabled={!nf.name.trim()}>Save & log</button>
+                    <button className="btn btn-soft" onClick={() => saveNewFood(false)} disabled={!nf.name.trim()}>Save only</button>
+                  </div>
+                  <div className="hint">Enter the per-unit numbers from a label (or that I give you in chat). It's saved to your food list for next time.</div>
+                </>
+              )}
+
+              <div style={{ marginTop: 12 }}>
+                <button className="btn-ghost" onClick={() => setTargetsOpen((v) => !v)}>{targets ? "Edit daily goals" : "Set daily goals"}</button>
+              </div>
+              {targetsOpen && (
+                <div className="form-grid">
+                  <input className="input num span2" inputMode="numeric" placeholder="Calorie goal" value={tDraft.calories} onChange={(e) => setTDraft({ ...tDraft, calories: e.target.value })} />
+                  <input className="input num" inputMode="numeric" placeholder="Protein (g)" value={tDraft.protein} onChange={(e) => setTDraft({ ...tDraft, protein: e.target.value })} />
+                  <input className="input num" inputMode="numeric" placeholder="Carbs (g)" value={tDraft.carbs} onChange={(e) => setTDraft({ ...tDraft, carbs: e.target.value })} />
+                  <input className="input num" inputMode="numeric" placeholder="Fat (g)" value={tDraft.fat} onChange={(e) => setTDraft({ ...tDraft, fat: e.target.value })} />
+                  <button className="btn" onClick={saveTargets}>Save goals</button>
+                  <button className="btn btn-soft" onClick={clearTargets}>Clear goals</button>
+                </div>
+              )}
+            </div>
+
+            {/* TODAY */}
+            <div className="section-h">
+              <h3>Today's log</h3>
+              {hasEntries ? <button className="btn-ghost" onClick={clearToday}>Clear day</button> : null}
+            </div>
+            <div className="card list">
+              {hasEntries ? (
+                entries.map((e) => (
+                  <div className="entry" key={e.id}>
+                    <div className="entry-left">
+                      <div className="entry-name">{e.name}</div>
+                      <div className="entry-macros">P {e.protein}g · C {e.carbs}g · F {e.fat}g</div>
+                    </div>
+                    <div className="entry-cal">{e.calories}</div>
+                    <button className="x" aria-label={`Remove ${e.name}`} onClick={() => removeEntry(e.id)}>×</button>
+                  </div>
+                ))
+              ) : (
+                <div className="empty">Nothing logged yet. Add from the food list above — it resets on its own tomorrow.</div>
+              )}
+            </div>
+
+            {/* HISTORY */}
+            {pastDays.length > 0 && (
+              <>
+                <div className="section-h">
+                  <h3>Earlier days</h3>
+                  <button className="btn-ghost" onClick={() => setHistoryOpen((v) => !v)}>{historyOpen ? "Hide" : "Show"}</button>
+                </div>
+                {historyOpen && (
+                  <div className="card list">
+                    {pastDays.map((k) => {
+                      const t = sumEntries(data.days[k]);
+                      return (
+                        <div className="hist-row" key={k}>
+                          <span className="hist-day">{shortDate(k)}</span>
+                          <span className="hist-nums"><span className="hist-kcal">{t.calories} kcal</span> · P {t.protein} · C {t.carbs} · F {t.fat}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="footnote">
+              Saved on this device · starts fresh each day.<br />
+              Built-in numbers are editable estimates — tweak any food to match your label.
+            </div>
+
+            {saveMsg ? <div className="toast">{saveMsg}</div> : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+window.__mounted = true;
+if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(function(){}); }
+
+</script>
+<script>
+(function(){
+  try {
+    var code = document.getElementById("appsrc").textContent;
+    var out = Babel.transform(code, { presets: [["react", { runtime: "classic" }]] }).code;
+    var s = document.createElement("script");
+    s.textContent = out;
+    document.body.appendChild(s);
+  } catch (err) {
+    window.__err = true;
+    var r = document.getElementById("root");
+    if (r) r.innerHTML = '<div style="font-family:-apple-system,sans-serif;padding:26px;color:#1B231D;font-size:15px">Build error: ' + String((err && err.message) || err) + '</div>';
+  }
+})();
+</script>
+</body>
+</html>
