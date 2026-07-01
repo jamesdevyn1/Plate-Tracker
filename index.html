@@ -201,13 +201,18 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  async function persist(next) {
-    setData(next);
+  // Persist automatically whenever data changes (after initial load).
+  useEffect(() => {
+    if (!loaded || !data) return;
     try {
-      await window.storage.set(STORE_KEY, JSON.stringify(next), false);
-    } catch (e) {
-      flash("Couldn't save that — your last change may not stick.");
-    }
+      const r = window.storage.set(STORE_KEY, JSON.stringify(data), false);
+      if (r && typeof r.catch === "function") r.catch(() => flash("Couldn't save — your last change may not stick."));
+    } catch (e) {}
+  }, [data, loaded]);
+
+  // All edits go through this so sequential changes build on the latest state.
+  function update(mutator) {
+    setData((prev) => mutator(prev));
   }
   function flash(msg) {
     setSaveMsg(msg);
@@ -229,20 +234,26 @@ function App() {
       carbs: round(m.carbs),
       fat: round(m.fat),
     };
-    const days = { ...(data.days || {}) };
-    days[today] = [...(days[today] || []), entry];
-    persist({ ...data, days });
+    update((prev) => {
+      const days = { ...(prev.days || {}) };
+      days[today] = [...(days[today] || []), entry];
+      return { ...prev, days };
+    });
   }
   function removeEntry(id) {
-    const days = { ...(data.days || {}) };
-    days[today] = (days[today] || []).filter((e) => e.id !== id);
-    if (days[today].length === 0) delete days[today];
-    persist({ ...data, days });
+    update((prev) => {
+      const days = { ...(prev.days || {}) };
+      days[today] = (days[today] || []).filter((e) => e.id !== id);
+      if (days[today].length === 0) delete days[today];
+      return { ...prev, days };
+    });
   }
   function clearToday() {
-    const days = { ...(data.days || {}) };
-    delete days[today];
-    persist({ ...data, days });
+    update((prev) => {
+      const days = { ...(prev.days || {}) };
+      delete days[today];
+      return { ...prev, days };
+    });
   }
 
   const getQty = (k) => {
@@ -285,14 +296,14 @@ function App() {
       },
       custom: true,
     };
-    persist({ ...data, foods: [food, ...foods] });
+    update((prev) => ({ ...prev, foods: [food, ...(prev.foods || [])] }));
     if (alsoLog) logFood(food, 1);
     else flash(`Saved ${food.name} to your foods`);
     setNf({ name: "", unit: "serving", calories: "", protein: "", carbs: "", fat: "" });
   }
 
   function deleteFood(id) {
-    persist({ ...data, foods: foods.filter((x) => x.id !== id) });
+    update((prev) => ({ ...prev, foods: (prev.foods || []).filter((x) => x.id !== id) }));
   }
 
   // meal builder ops
@@ -320,7 +331,7 @@ function App() {
   function saveMeal() {
     if (!basket.length) return;
     const meal = { id: `m-${uid()}`, name: mealName.trim() || "Meal", items: draftMeal.items };
-    persist({ ...data, meals: [meal, ...meals] });
+    update((prev) => ({ ...prev, meals: [meal, ...(prev.meals || [])] }));
     flash(`Saved ${meal.name} to meals`);
   }
   function logDraftMeal() {
@@ -332,17 +343,17 @@ function App() {
     setTab("log");
   }
   function deleteMeal(id) {
-    persist({ ...data, meals: meals.filter((m) => m.id !== id) });
+    update((prev) => ({ ...prev, meals: (prev.meals || []).filter((m) => m.id !== id) }));
   }
 
   function saveTargets() {
     const t = { calories: round(tDraft.calories), protein: round(tDraft.protein), carbs: round(tDraft.carbs), fat: round(tDraft.fat) };
     const any = t.calories || t.protein || t.carbs || t.fat;
-    persist({ ...data, targets: any ? t : null });
+    update((prev) => ({ ...prev, targets: any ? t : null }));
     setTargetsOpen(false);
   }
   function clearTargets() {
-    persist({ ...data, targets: null });
+    update((prev) => ({ ...prev, targets: null }));
     setTDraft({ calories: "", protein: "", carbs: "", fat: "" });
     setTargetsOpen(false);
   }
